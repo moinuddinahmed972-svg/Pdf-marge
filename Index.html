@@ -1,0 +1,616 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>Smart PDF Merger</title>
+
+<!-- PDF.js for Preview -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+
+<!-- PDF-lib for Merging -->
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+
+<style>
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: #f3f5f9;
+    color: #222;
+}
+
+header {
+    background: #182848;
+    color: white;
+    padding: 25px 15px;
+    text-align: center;
+}
+
+header h1 {
+    margin: 0 0 10px;
+}
+
+.container {
+    max-width: 1100px;
+    margin: auto;
+    padding: 20px;
+}
+
+.upload-box {
+    background: white;
+    padding: 25px;
+    border-radius: 12px;
+    text-align: center;
+    border: 2px dashed #667eea;
+    margin-bottom: 20px;
+}
+
+input[type="file"] {
+    width: 100%;
+    margin-top: 15px;
+}
+
+.controls {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+}
+
+button {
+    border: none;
+    padding: 11px 16px;
+    border-radius: 7px;
+    cursor: pointer;
+    background: #667eea;
+    color: white;
+    font-size: 14px;
+}
+
+button:hover {
+    opacity: 0.85;
+}
+
+button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.danger {
+    background: #e74c3c;
+}
+
+.success {
+    background: #16a085;
+}
+
+.pages {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 15px;
+}
+
+.page-card {
+    background: white;
+    padding: 12px;
+    border-radius: 10px;
+    box-shadow: 0 2px 8px #00000012;
+    border: 2px solid transparent;
+}
+
+.page-card.excluded {
+    opacity: 0.45;
+    border-color: #e74c3c;
+}
+
+.page-card canvas {
+    width: 100%;
+    height: auto;
+    border: 1px solid #ddd;
+    display: block;
+    margin-bottom: 10px;
+    background: white;
+}
+
+.page-info {
+    font-size: 13px;
+    margin-bottom: 10px;
+    overflow-wrap: anywhere;
+}
+
+.page-actions {
+    display: flex;
+    gap: 5px;
+    flex-wrap: wrap;
+}
+
+.page-actions button {
+    padding: 7px 10px;
+    font-size: 12px;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 10px;
+    font-weight: bold;
+    font-size: 14px;
+}
+
+#status {
+    margin: 15px 0;
+    font-weight: bold;
+}
+
+@media(max-width: 500px) {
+    .container {
+        padding: 12px;
+    }
+
+    .pages {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+    }
+}
+</style>
+</head>
+
+<body>
+
+<header>
+    <h1>Smart PDF Merger</h1>
+    <p>Preview • Select • Arrange • Merge</p>
+</header>
+
+<div class="container">
+
+    <div class="upload-box">
+        <h2>Upload Your PDF Files</h2>
+        <p>Select multiple PDF files to preview their pages.</p>
+
+        <input
+            type="file"
+            id="pdfInput"
+            accept="application/pdf"
+            multiple
+        >
+    </div>
+
+    <div class="controls">
+        <button onclick="selectAll()">Select All</button>
+
+        <button onclick="deselectAll()">
+            Deselect All
+        </button>
+
+        <button class="danger" onclick="removeExcluded()">
+            Remove Excluded Pages
+        </button>
+
+        <button class="success" onclick="mergePDF()">
+            Merge & Download PDF
+        </button>
+    </div>
+
+    <div id="status">Upload PDF files to begin.</div>
+
+    <div id="pages" class="pages"></div>
+
+</div>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+"https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+const { PDFDocument } = PDFLib;
+
+const pdfInput = document.getElementById("pdfInput");
+const pagesContainer = document.getElementById("pages");
+const statusText = document.getElementById("status");
+
+let filesData = [];
+let pageItems = [];
+let nextId = 0;
+
+
+// Upload PDF files
+pdfInput.addEventListener("change", async function () {
+
+    const files = Array.from(pdfInput.files);
+
+    if (!files.length) return;
+
+    statusText.textContent = "Loading PDFs...";
+
+    try {
+        for (const file of files) {
+
+            const bytes = new Uint8Array(
+                await file.arrayBuffer()
+            );
+
+            // Load PDF for merging
+            const pdfDoc = await PDFDocument.load(bytes);
+
+            // Load PDF for preview
+            const previewDoc = await pdfjsLib.getDocument({
+                data: bytes.slice()
+            }).promise;
+
+            const fileIndex = filesData.length;
+
+            filesData.push({
+                name: file.name,
+                pdfDoc: pdfDoc
+            });
+
+            for (let i = 1; i <= previewDoc.numPages; i++) {
+
+                const page = await previewDoc.getPage(i);
+
+                const viewport = page.getViewport({
+                    scale: 0.45
+                });
+
+                const canvas = document.createElement("canvas");
+
+                canvas.width = viewport.width;
+                canvas.height = viewport.height;
+
+                const context = canvas.getContext("2d");
+
+                await page.render({
+                    canvasContext: context,
+                    viewport: viewport
+                }).promise;
+
+                const item = {
+                    id: nextId++,
+                    fileIndex: fileIndex,
+                    pageNumber: i,
+                    included: true,
+                    canvas: canvas
+                };
+
+                pageItems.push(item);
+
+                createPageCard(item);
+            }
+        }
+
+        updateStatus();
+
+    } catch (error) {
+
+        console.error(error);
+
+        statusText.textContent =
+            "Error loading PDF. Please try another file.";
+
+    }
+
+    pdfInput.value = "";
+});
+
+
+// Create preview card
+function createPageCard(item) {
+
+    const card = document.createElement("div");
+
+    card.className = "page-card";
+    card.dataset.id = item.id;
+
+    const canvas = item.canvas.cloneNode(true);
+
+    const info = document.createElement("div");
+    info.className = "page-info";
+
+    info.textContent =
+        filesData[item.fileIndex].name +
+        " | Page " + item.pageNumber;
+
+    const label = document.createElement("label");
+    label.className = "checkbox-label";
+
+    const checkbox = document.createElement("input");
+
+    checkbox.type = "checkbox";
+    checkbox.checked = item.included;
+
+    checkbox.addEventListener("change", function () {
+
+        item.included = checkbox.checked;
+
+        card.classList.toggle(
+            "excluded",
+            !item.included
+        );
+
+        updateStatus();
+    });
+
+    label.appendChild(checkbox);
+
+    label.appendChild(
+        document.createTextNode("Include in PDF")
+    );
+
+    const actions = document.createElement("div");
+    actions.className = "page-actions";
+
+    const previewButton = document.createElement("button");
+
+    previewButton.textContent = "Preview";
+
+    previewButton.onclick = function () {
+        openPreview(item);
+    };
+
+    const upButton = document.createElement("button");
+
+    upButton.textContent = "↑";
+
+    upButton.onclick = function () {
+        movePage(item.id, -1);
+    };
+
+    const downButton = document.createElement("button");
+
+    downButton.textContent = "↓";
+
+    downButton.onclick = function () {
+        movePage(item.id, 1);
+    };
+
+    const removeButton = document.createElement("button");
+
+    removeButton.textContent = "Remove";
+    removeButton.className = "danger";
+
+    removeButton.onclick = function () {
+        deletePage(item.id);
+    };
+
+    actions.append(
+        previewButton,
+        upButton,
+        downButton,
+        removeButton
+    );
+
+    card.append(
+        canvas,
+        info,
+        label,
+        actions
+    );
+
+    pagesContainer.appendChild(card);
+
+    card.classList.toggle(
+        "excluded",
+        !item.included
+    );
+}
+
+
+// Large Preview
+function openPreview(item) {
+
+    const previewWindow = window.open(
+        "",
+        "_blank"
+    );
+
+    if (!previewWindow) {
+        alert("Please allow pop-ups to preview.");
+        return;
+    }
+
+    const image = item.canvas.toDataURL("image/png");
+
+    previewWindow.document.write(`
+        <html>
+        <head>
+            <title>PDF Page Preview</title>
+            <style>
+                body {
+                    margin: 0;
+                    background: #333;
+                    text-align: center;
+                }
+                img {
+                    max-width: 100%;
+                    height: auto;
+                    background: white;
+                }
+            </style>
+        </head>
+        <body>
+            <img src="${image}">
+        </body>
+        </html>
+    `);
+
+    previewWindow.document.close();
+}
+
+
+// Select all pages
+function selectAll() {
+
+    pageItems.forEach(item => {
+        item.included = true;
+    });
+
+    renderPages();
+}
+
+
+// Deselect all pages
+function deselectAll() {
+
+    pageItems.forEach(item => {
+        item.included = false;
+    });
+
+    renderPages();
+}
+
+
+// Remove excluded pages
+function removeExcluded() {
+
+    pageItems = pageItems.filter(
+        item => item.included
+    );
+
+    renderPages();
+}
+
+
+// Delete a page completely
+function deletePage(id) {
+
+    pageItems = pageItems.filter(
+        item => item.id !== id
+    );
+
+    renderPages();
+}
+
+
+// Move page up or down
+function movePage(id, direction) {
+
+    const index = pageItems.findIndex(
+        item => item.id === id
+    );
+
+    const newIndex = index + direction;
+
+    if (
+        index < 0 ||
+        newIndex < 0 ||
+        newIndex >= pageItems.length
+    ) {
+        return;
+    }
+
+    const temp = pageItems[index];
+
+    pageItems[index] = pageItems[newIndex];
+
+    pageItems[newIndex] = temp;
+
+    renderPages();
+}
+
+
+// Re-render cards in correct order
+function renderPages() {
+
+    pagesContainer.innerHTML = "";
+
+    pageItems.forEach(item => {
+        createPageCard(item);
+    });
+
+    updateStatus();
+}
+
+
+// Update page count
+function updateStatus() {
+
+    const included = pageItems.filter(
+        item => item.included
+    ).length;
+
+    statusText.textContent =
+        "Total Pages: " + pageItems.length +
+        " | Selected: " + included;
+}
+
+
+// Merge selected pages
+async function mergePDF() {
+
+    const selectedPages = pageItems.filter(
+        item => item.included
+    );
+
+    if (!selectedPages.length) {
+
+        alert("Please select at least one page.");
+
+        return;
+    }
+
+    try {
+
+        statusText.textContent = "Merging PDF...";
+
+        const mergedPDF = await PDFDocument.create();
+
+        for (const item of selectedPages) {
+
+            const sourcePDF =
+                filesData[item.fileIndex].pdfDoc;
+
+            const [copiedPage] =
+                await mergedPDF.copyPages(
+                    sourcePDF,
+                    [item.pageNumber - 1]
+                );
+
+            mergedPDF.addPage(copiedPage);
+        }
+
+        const pdfBytes = await mergedPDF.save();
+
+        const blob = new Blob(
+            [pdfBytes],
+            { type: "application/pdf" }
+        );
+
+        const url = URL.createObjectURL(blob);
+
+        const link = document.createElement("a");
+
+        link.href = url;
+        link.download = "Merged_PDF.pdf";
+
+        document.body.appendChild(link);
+
+        link.click();
+
+        link.remove();
+
+        URL.revokeObjectURL(url);
+
+        statusText.textContent =
+            "PDF successfully merged and downloaded!";
+
+    } catch (error) {
+
+        console.error(error);
+
+        statusText.textContent =
+            "Error merging PDF. Please try again.";
+
+    }
+}
+
+</script>
+
+</body>
+</html>
